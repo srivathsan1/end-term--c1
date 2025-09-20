@@ -1,0 +1,289 @@
+# backend_pms.py
+
+import psycopg2
+import streamlit as st
+from datetime import date
+from psycopg2.errors import UniqueViolation
+
+# Database connection details
+DB_HOST = "localhost"
+DB_NAME = "your_db_name"
+DB_USER = "your_username"
+DB_PASS = "your_password"
+
+def get_db_connection():
+    """Establishes a connection to the PostgreSQL database."""
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASS
+        )
+        return conn
+    except psycopg2.OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return None
+
+# --- User Authentication ---
+def authenticate_user(username, password):
+    conn = get_db_connection()
+    if conn is None: return None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT u.id, u.username, u.role, e.id FROM users u JOIN employees e ON u.id = e.user_id WHERE u.username = %s AND u.password = %s;", (username, password))
+        user_data = cur.fetchone()
+        return user_data
+    except Exception as e:
+        st.error(f"Authentication error: {e}")
+        return None
+    finally:
+        if conn: conn.close()
+
+# --- Goal Management ---
+def set_goal(employee_id, manager_id, description, due_date):
+    conn = get_db_connection()
+    if conn is None: return False
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO goals (employee_id, manager_id, description, due_date, status) VALUES (%s, %s, %s, %s, 'Draft');",
+                    (employee_id, manager_id, description, due_date))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error setting goal: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+def update_goal_status(goal_id, status):
+    conn = get_db_connection()
+    if conn is None: return False
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE goals SET status = %s WHERE id = %s;", (status, goal_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error updating goal status: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+def get_goals_for_employee(employee_id):
+    conn = get_db_connection()
+    if conn is None: return []
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, description, due_date, status FROM goals WHERE employee_id = %s ORDER BY due_date ASC;", (employee_id,))
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error fetching goals: {e}")
+        return []
+    finally:
+        if conn: conn.close()
+
+# --- Task Management ---
+def log_task(goal_id, employee_id, description):
+    conn = get_db_connection()
+    if conn is None: return False
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO tasks (goal_id, employee_id, description) VALUES (%s, %s, %s);", (goal_id, employee_id, description))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error logging task: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+def get_tasks_for_goal(goal_id):
+    conn = get_db_connection()
+    if conn is None: return []
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, description, is_approved FROM tasks WHERE goal_id = %s ORDER BY created_at DESC;", (goal_id,))
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error fetching tasks: {e}")
+        return []
+    finally:
+        if conn: conn.close()
+
+def approve_task(task_id):
+    conn = get_db_connection()
+    if conn is None: return False
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE tasks SET is_approved = TRUE WHERE id = %s;", (task_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error approving task: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+# --- Feedback & Reporting ---
+def provide_feedback(goal_id, manager_id, content):
+    conn = get_db_connection()
+    if conn is None: return False
+    try:
+        cur = conn.cursor()
+        cur.execute("INSERT INTO feedback (goal_id, manager_id, content) VALUES (%s, %s, %s);", (goal_id, manager_id, content))
+        conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error providing feedback: {e}")
+        return False
+    finally:
+        if conn: conn.close()
+
+def get_feedback_for_goal(goal_id):
+    conn = get_db_connection()
+    if conn is None: return []
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT content, created_at FROM feedback WHERE goal_id = %s ORDER BY created_at DESC;", (goal_id,))
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error fetching feedback: {e}")
+        return []
+    finally:
+        if conn: conn.close()
+
+def get_employee_performance_history(employee_id):
+    conn = get_db_connection()
+    if conn is None: return []
+    try:
+        cur = conn.cursor()
+        # Query to get all goals, tasks, and feedback for an employee
+        cur.execute("""
+            SELECT
+                g.description AS goal_description, g.due_date, g.status AS goal_status,
+                t.description AS task_description, t.is_approved,
+                f.content AS feedback, f.created_at AS feedback_date
+            FROM goals g
+            LEFT JOIN tasks t ON g.id = t.goal_id
+            LEFT JOIN feedback f ON g.id = f.goal_id
+            WHERE g.employee_id = %s
+            ORDER BY g.due_date, t.created_at;
+        """, (employee_id,))
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error fetching performance history: {e}")
+        return []
+    finally:
+        if conn: conn.close()
+        
+def get_employees_for_manager(manager_id):
+    conn = get_db_connection()
+    if conn is None: return []
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name FROM employees WHERE manager_id = %s ORDER BY name;", (manager_id,))
+        return cur.fetchall()
+    except Exception as e:
+        st.error(f"Error fetching employees for manager: {e}")
+        return []
+    finally:
+        if conn: conn.close()
+
+
+
+
+
+-- Drop tables to ensure a clean slate on each run
+-- The order is important due to foreign key constraints
+DROP TABLE IF EXISTS shipments;
+DROP TABLE IF EXISTS order_items;
+DROP TABLE IF EXISTS orders;
+DROP TABLE IF EXISTS products;
+DROP TABLE IF EXISTS users;
+
+
+-- Create a table for user credentials for the login page
+CREATE TABLE users (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    role VARCHAR(20) NOT NULL -- e.g., 'admin', 'manager'
+);
+
+-- Insert a sample user for the warehouse manager, ignoring if it already exists
+INSERT INTO users (username, password, role) VALUES
+('warehouse_manager', 'password123', 'manager')
+ON CONFLICT (username) DO NOTHING;
+
+
+-- Create a table for products in inventory
+CREATE TABLE products (
+    id SERIAL PRIMARY KEY,
+    product_name VARCHAR(100) NOT NULL,
+    sku VARCHAR(50) NOT NULL UNIQUE,
+    stock_quantity INTEGER NOT NULL,
+    low_stock_threshold INTEGER NOT NULL DEFAULT 10
+);
+
+-- Insert sample products, ignoring if they already exist
+INSERT INTO products (product_name, sku, stock_quantity, low_stock_threshold) VALUES
+('Laptop', 'LAP-001', 150, 20),
+('Keyboard', 'KEY-002', 30, 10),
+('Mouse', 'MOU-003', 5, 10),
+('Monitor', 'MON-004', 75, 15),
+('Webcam', 'WEB-005', 100, 25)
+ON CONFLICT (sku) DO NOTHING;
+
+
+-- Create a table for customer orders
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    customer_name VARCHAR(100) NOT NULL,
+    order_date DATE NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'Pending' -- e.g., 'Pending', 'Shipped', 'Canceled'
+);
+
+-- Insert sample orders
+INSERT INTO orders (customer_name, order_date, status) VALUES
+('TechCorp Solutions', '2024-09-18', 'Shipped'),
+('Innovate Inc.', '2024-09-19', 'Pending'),
+('Global Logistics', '2024-09-19', 'Pending'),
+('Retail Hub', '2024-09-17', 'Shipped'),
+('QuickMart', '2024-09-16', 'Canceled');
+
+
+-- Create a linking table to manage products within an order
+CREATE TABLE order_items (
+    id SERIAL PRIMARY KEY,
+    order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+    product_id INTEGER REFERENCES products(id),
+    quantity INTEGER NOT NULL
+);
+
+-- Insert sample order items, linking to the orders and products
+INSERT INTO order_items (order_id, product_id, quantity) VALUES
+(1, 1, 10), -- 10 Laptops for order 1
+(1, 4, 5),  -- 5 Monitors for order 1
+(2, 2, 20), -- 20 Keyboards for order 2
+(3, 3, 5),  -- 5 Mouses for order 3
+(4, 5, 50); -- 50 Webcams for order 4
+
+
+-- Create a table for shipments
+CREATE TABLE shipments (
+    id SERIAL PRIMARY KEY,
+    order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
+    shipment_date DATE NOT NULL,
+    tracking_number VARCHAR(100) UNIQUE,
+    status VARCHAR(20) NOT NULL DEFAULT 'Pending' -- e.g., 'Pending', 'In Transit', 'Delivered', 'Failed'
+);
+
+-- Insert sample shipments
+INSERT INTO shipments (order_id, shipment_date, tracking_number, status) VALUES
+(1, '2024-09-19', 'TRK-987654321', 'Delivered')
+ON CONFLICT (tracking_number) DO NOTHING;
+
+INSERT INTO shipments (order_id, shipment_date, tracking_number, status) VALUES
+(4, '2024-09-18', 'TRK-123456789', 'In Transit')
+ON CONFLICT (tracking_number) DO NOTHING;
